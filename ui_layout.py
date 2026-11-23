@@ -1,12 +1,13 @@
-"""第二阶段嗅探器布局和莫兰迪浅色样式。"""
+"""第三阶段嗅探器布局和莫兰迪浅色样式。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QSpinBox,
-    QSplitter, QTableView, QTextEdit, QVBoxLayout, QWidget,
+    QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
+    QSpinBox, QSplitter, QTableView, QTextEdit, QVBoxLayout, QWidget,
 )
 
+from packet_filter import PROTOCOLS, PacketFilterModel
 from packet_model import PacketTableModel
 
 
@@ -23,7 +24,7 @@ def build_layout(window) -> None:
     layout.setSpacing(10)
     title = QLabel("网络嗅探器")
     title.setObjectName("title")
-    subtitle = QLabel("实验 1A · 第二阶段 · 实时抓包与数据包查看")
+    subtitle = QLabel("实验 1A · 第三阶段 · 过滤与 PCAP 文件导入")
     subtitle.setObjectName("subtitle")
     layout.addWidget(title)
     layout.addWidget(subtitle)
@@ -36,6 +37,7 @@ def build_layout(window) -> None:
     window.interface_box.setToolTip("默认建议为 Scapy 当前默认接口；已有数据时请先停止并清空再更换网卡")
     controls.addWidget(window.interface_box, 1)
     for name, text, callback in (
+        ("open_button", "打开 pcap", window.open_capture),
         ("start_button", "开始抓包", window.start_capture),
         ("stop_button", "停止", window.stop_capture),
         ("clear_button", "清空", window.clear_packets),
@@ -61,6 +63,42 @@ def build_layout(window) -> None:
     limits.addStretch()
     layout.addLayout(limits)
 
+    filters = QHBoxLayout()
+    filters.setSpacing(7)
+    filters.addWidget(QLabel("显示筛选"))
+    window.protocol_box = QComboBox()
+    window.protocol_box.addItems(PROTOCOLS)
+    window.protocol_box.setObjectName("protocol_box")
+    window.protocol_box.setToolTip("协议筛选仅改变表格显示，不改变保留数据和保存内容")
+    filters.addWidget(window.protocol_box)
+    window.ip_edit = QLineEdit()
+    window.ip_edit.setPlaceholderText("IP 地址或 CIDR（可选）")
+    window.ip_edit.setObjectName("ip_edit")
+    window.ip_edit.setClearButtonEnabled(True)
+    filters.addWidget(window.ip_edit, 1)
+    window.port_edit = QLineEdit()
+    window.port_edit.setPlaceholderText("端口（可选）")
+    window.port_edit.setObjectName("port_edit")
+    window.port_edit.setMaximumWidth(135)
+    window.port_edit.setClearButtonEnabled(True)
+    filters.addWidget(window.port_edit)
+    window.apply_filter_button = QPushButton("应用筛选")
+    window.apply_filter_button.setObjectName("apply_filter_button")
+    window.apply_filter_button.clicked.connect(window.apply_display_filter)
+    filters.addWidget(window.apply_filter_button)
+    window.reset_filter_button = QPushButton("重置筛选")
+    window.reset_filter_button.setObjectName("reset_filter_button")
+    window.reset_filter_button.clicked.connect(window.reset_display_filter)
+    filters.addWidget(window.reset_filter_button)
+    window.ip_edit.returnPressed.connect(window.apply_display_filter)
+    window.port_edit.returnPressed.connect(window.apply_display_filter)
+    layout.addLayout(filters)
+    window.filter_status = QLabel("未设置筛选条件")
+    window.filter_status_label = window.filter_status
+    window.filter_status.setObjectName("filter_status")
+    window.filter_status.setWordWrap(True)
+    layout.addWidget(window.filter_status)
+
     window.status_label = QLabel()
     window.status_label.setObjectName("status")
     window.status_label.setWordWrap(True)
@@ -74,9 +112,15 @@ def build_layout(window) -> None:
     layout.addWidget(window.status_label)
     layout.addWidget(window.counter_label)
 
-    window.packet_model = PacketTableModel(window)
+    window.source_model = PacketTableModel(window)
+    window.proxy_model = PacketFilterModel(window)
+    # packet_model 公开为代理模型，源数据通过 source_model 保存。
+    window.packet_model = window.proxy_model
+    window.packet_proxy = window.proxy_model
+    window.filter_model = window.proxy_model
+    window.proxy_model.setSourceModel(window.source_model)
     window.packet_table = QTableView()
-    window.packet_table.setModel(window.packet_model)
+    window.packet_table.setModel(window.proxy_model)
     window.packet_table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
     window.packet_table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
     window.packet_table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
@@ -124,9 +168,10 @@ def apply_style(app) -> None:
         QLabel#status { background: #E4E9E4; color: #3D594F;
             border-radius: 7px; padding: 9px; }
         QLabel#counters { color: #5A625E; padding: 3px; }
-        QComboBox, QSpinBox, QTextEdit, QTableView {
+        QLabel#filter_status { color: #5A625E; padding: 1px 3px; }
+        QComboBox, QSpinBox, QLineEdit, QTextEdit, QTableView {
             background: #FCFAF8; border: 1px solid #D7D0CA; border-radius: 6px; }
-        QComboBox, QSpinBox { padding: 7px; }
+        QComboBox, QSpinBox, QLineEdit { padding: 7px; }
         QComboBox:disabled, QSpinBox:disabled { background: #ECEAE6; color: #817F79; }
         QPushButton { background: #C9D5CF; color: #324D41; border: none;
             border-radius: 6px; padding: 9px 15px; }
