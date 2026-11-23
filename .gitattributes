@@ -1,0 +1,9 @@
+# 文本统一使用 LF 换行。
+* text=auto eol=lf
+
+# 以下文件按二进制处理，不进行换行转换。
+*.pcap binary
+*.pcapng binary
+*.png binary
+*.pdf binary
+*.docx binary
