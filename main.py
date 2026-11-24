@@ -155,6 +155,26 @@ class SnifferWindow(QMainWindow):
             f"  |  丢弃明细：缓存 {stats.drop_queue} / 上限 {stats.drop_limit}"
             f"  |  原始数据 {stats.retained_bytes / 1048576:.2f} / {MAX_BYTES / 1048576:.0f} MiB"
         )
+
+    def _reset_analysis_stats(self) -> None:
+        """清除当前数据集的 DNS 统计摘要。"""
+        if hasattr(self, "analysis_stats_label"):
+            self.analysis_stats_label.setText("DNS统计：尚未分析")
+
+    def _show_analysis_stats(self, result) -> None:
+        """显示完整分析结果的 DNS 统计，不受表格筛选影响。"""
+        stats = getattr(result, "stats", None)
+        if stats is None:
+            self._reset_analysis_stats()
+            return
+        self.analysis_stats_label.setText(
+            "DNS统计："
+            f"查询 {getattr(stats, 'query_count', 0)} · "
+            f"响应 {getattr(stats, 'response_count', 0)} · "
+            f"匹配事务 {getattr(stats, 'matched_transaction_count', 0)} · "
+            f"未匹配查询 {getattr(stats, 'unmatched_query_count', 0)} · "
+            f"唯一直接域名 {getattr(stats, 'unique_domain_count', 0)}"
+        )
     def change_limit(self) -> None:
         stats = self.buffer.snapshot()
         if self.is_busy() or self._closing or self.packets or stats.received or stats.pending:
@@ -375,6 +395,7 @@ class SnifferWindow(QMainWindow):
         if self.is_busy() or self._closing or self.buffer.snapshot().pending or not self.packets:
             return
         snapshot = self.domain_controller.snapshot(self.packets, self.source_file or "live")
+        self._reset_analysis_stats()
         self.analysis_thread = DomainAnalysisWorker(snapshot, parent=self)
         self.state = "analysing"
         self.notice = "正在后台分析 DNS、HTTP Host 和 TLS SNI"
@@ -390,6 +411,7 @@ class SnifferWindow(QMainWindow):
             self.analysis_thread.request_cancel()
         self._dataset_generation = self.domain_controller.invalidate()
         self.analysis_result = None
+        self._reset_analysis_stats()
         if getattr(self.filter_spec, "domain", ""):
             self.filter_spec = FilterSpec(
                 self.filter_spec.protocol, self.filter_spec.network, self.filter_spec.port
@@ -413,17 +435,21 @@ class SnifferWindow(QMainWindow):
             if same_dataset:
                 self.analysis_result = worker.result
                 self.domain_controller.commit(snapshot, worker.result, self.packets)
+                self._show_analysis_stats(worker.result)
                 self.source_model.set_analysis(worker.result)
                 self.proxy_model.set_filters(self.filter_spec, None)
                 self.state = "stopped"
                 self.notice = "域名分析完成；候选 DNS/IP/TTL 默认不参与确定筛选"
             else:
+                self._reset_analysis_stats()
                 self.state = "stopped"
                 self.notice = "域名分析结果已过期，未提交到当前数据集"
         elif worker.cancelled:
+            self._reset_analysis_stats()
             self.state = "stopped"
             self.notice = "域名分析已取消，原始数据保持不变"
         else:
+            self._reset_analysis_stats()
             self.state = "error"
             self.notice = worker.error or "域名分析失败，原始数据保持不变"
         worker.deleteLater()

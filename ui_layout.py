@@ -121,6 +121,11 @@ def build_layout(window) -> None:
     )
     layout.addWidget(window.status_label)
     layout.addWidget(window.counter_label)
+    window.analysis_stats_label = QLabel("DNS统计：尚未分析")
+    window.analysis_stats_label.setObjectName("analysis_stats")
+    window.analysis_stats_label.setWordWrap(True)
+    window.analysis_stats_label.setToolTip("完整 DNS 分析结果统计，不随显示筛选改变")
+    layout.addWidget(window.analysis_stats_label)
 
     window.source_model = PacketTableModel(window)
     window.proxy_model = PacketFilterModel(window)
@@ -178,6 +183,8 @@ def apply_style(app) -> None:
         QLabel#status { background: #E4E9E4; color: #3D594F;
             border-radius: 7px; padding: 9px; }
         QLabel#counters { color: #5A625E; padding: 3px; }
+        QLabel#analysis_stats { background: #E9E5E0; color: #5A625E;
+            border-radius: 6px; padding: 7px 9px; }
         QLabel#filter_status { color: #5A625E; padding: 1px 3px; }
         QComboBox, QSpinBox, QLineEdit, QTextEdit, QTableView {
             background: #FCFAF8; border: 1px solid #D7D0CA; border-radius: 6px; }

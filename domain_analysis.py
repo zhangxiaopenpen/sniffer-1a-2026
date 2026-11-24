@@ -11,6 +11,7 @@ from PySide6.QtCore import QThread
 from domain_models import (
     AnalysisBudget,
     AnalysisResult,
+    AnalysisStats,
     AnalysisSnapshot,
     DNSMessage,
     DNSTransaction,
@@ -49,6 +50,48 @@ def _timestamp(packet) -> float | None:
 
 def _direct_evidence(result: PacketParseResult) -> tuple[DomainEvidence, ...]:
     return tuple(result.evidence)
+
+
+def _build_analysis_stats(
+    messages,
+    transactions,
+    rows,
+) -> AnalysisStats:
+    """Build the aggregate statistics from the final DNS and evidence data.
+
+    ``transactions`` can contain an unmatched response represented by a
+    transaction whose ``query`` is that response.  Such a transaction must
+    not count as a matched query/response pair, so matched query packet
+    indices are taken only from transactions with both ``matched`` and a
+    response.
+    """
+    message_items = tuple(messages)
+    transaction_items = tuple(transactions)
+    query_messages = tuple(message for message in message_items if not message.is_response)
+    response_messages = tuple(message for message in message_items if message.is_response)
+    matched_query_indices = {
+        transaction.query.packet_index
+        for transaction in transaction_items
+        if transaction.matched and transaction.response is not None
+    }
+    query_indices = {message.packet_index for message in query_messages}
+    unique_domains = {
+        evidence.domain.casefold().rstrip(".")
+        for evidence_items in rows.values()
+        for evidence in evidence_items
+        if evidence.confidence == "direct"
+    }
+    return AnalysisStats(
+        query_count=len(query_messages),
+        response_count=len(response_messages),
+        matched_transaction_count=sum(
+            1
+            for transaction in transaction_items
+            if transaction.matched and transaction.response is not None
+        ),
+        unmatched_query_count=len(query_indices - matched_query_indices),
+        unique_domain_count=len(unique_domains),
+    )
 
 
 def _same_dns_key(query: DNSMessage, response: DNSMessage, window: float) -> bool:
@@ -209,12 +252,14 @@ def analyze_packets(
     if progress_callback:
         progress_callback(100)
     _check_cancel(cancel_event)
+    stats = _build_analysis_stats(messages, transactions, rows)
     return AnalysisResult(
         generation=generation,
         rows={row: tuple(items) for row, items in rows.items()},
         dns_messages=tuple(sorted(messages, key=lambda item: item.packet_index)),
         transactions=tuple(transactions),
         notes=tuple(notes),
+        stats=stats,
     )
 
 

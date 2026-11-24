@@ -144,6 +144,44 @@ class AnalysisSnapshot:
 
 
 @dataclass(frozen=True)
+class AnalysisStats:
+    """保存一次域名分析的统计快照。
+
+    Attributes:
+        query_count: DNS 查询消息数量。
+        response_count: DNS 响应消息数量。
+        matched_transaction_count: 成功关联查询与响应的事务数量。
+        unmatched_query_count: 未关联到响应的查询数量。
+        unique_domain_count: 分析结果中的唯一域名数量。
+
+    Raises:
+        TypeError: 当统计值不是整数时。
+        ValueError: 当统计值为负数时。
+    """
+
+    query_count: int = 0
+    response_count: int = 0
+    matched_transaction_count: int = 0
+    unmatched_query_count: int = 0
+    unique_domain_count: int = 0
+
+    def __post_init__(self) -> None:
+        """校验统计值均为非负整数。"""
+        for name in (
+            "query_count",
+            "response_count",
+            "matched_transaction_count",
+            "unmatched_query_count",
+            "unique_domain_count",
+        ):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise TypeError(f"{name} 必须是非负整数")
+            if value < 0:
+                raise ValueError(f"{name} 必须是非负整数")
+
+
+@dataclass(frozen=True)
 class AnalysisResult:
     """按原始包索引保存的完整分析结果。"""
 
@@ -153,6 +191,7 @@ class AnalysisResult:
     transactions: tuple[DNSTransaction, ...] = ()
     notes: tuple[str, ...] = ()
     warning: str = ""
+    stats: AnalysisStats = field(default_factory=AnalysisStats)
 
     def row_evidence(self, row: int) -> tuple[DomainEvidence, ...]:
         """返回指定源行的证据；未知行返回空元组。"""
