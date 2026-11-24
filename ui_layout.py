@@ -3,7 +3,7 @@
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
-    QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
+    QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit, QPushButton,
     QSpinBox, QSplitter, QTableView, QTextEdit, QVBoxLayout, QWidget,
 )
 
@@ -24,7 +24,7 @@ def build_layout(window) -> None:
     layout.setSpacing(10)
     title = QLabel("网络嗅探器")
     title.setObjectName("title")
-    subtitle = QLabel("实验 1A · 第三阶段 · 过滤与 PCAP 文件导入")
+    subtitle = QLabel("实验 1A · 第四阶段 · 域名证据与 DNS 关联")
     subtitle.setObjectName("subtitle")
     layout.addWidget(title)
     layout.addWidget(subtitle)
@@ -42,6 +42,7 @@ def build_layout(window) -> None:
         ("stop_button", "停止", window.stop_capture),
         ("clear_button", "清空", window.clear_packets),
         ("save_button", "保存 pcap", window.save_capture),
+        ("analyze_button", "分析域名", window.start_domain_analysis),
     ):
         button = QPushButton(text)
         button.setObjectName(name)
@@ -82,6 +83,14 @@ def build_layout(window) -> None:
     window.port_edit.setMaximumWidth(135)
     window.port_edit.setClearButtonEnabled(True)
     filters.addWidget(window.port_edit)
+    window.domain_edit = QLineEdit()
+    window.domain_edit.setPlaceholderText("域名（可选，如 www.baidu.com）")
+    window.domain_edit.setObjectName("domain_edit")
+    window.domain_edit.setClearButtonEnabled(True)
+    filters.addWidget(window.domain_edit, 1)
+    window.candidate_box = QCheckBox("含候选")
+    window.candidate_box.setToolTip("候选 DNS/IP/TTL 证据仅供参考，默认不参与确定域名筛选")
+    filters.addWidget(window.candidate_box)
     window.apply_filter_button = QPushButton("应用筛选")
     window.apply_filter_button.setObjectName("apply_filter_button")
     window.apply_filter_button.clicked.connect(window.apply_display_filter)
@@ -92,6 +101,7 @@ def build_layout(window) -> None:
     filters.addWidget(window.reset_filter_button)
     window.ip_edit.returnPressed.connect(window.apply_display_filter)
     window.port_edit.returnPressed.connect(window.apply_display_filter)
+    window.domain_edit.returnPressed.connect(window.apply_display_filter)
     layout.addLayout(filters)
     window.filter_status = QLabel("未设置筛选条件")
     window.filter_status_label = window.filter_status
@@ -131,7 +141,7 @@ def build_layout(window) -> None:
     window.packet_table.verticalHeader().setDefaultSectionSize(30)
     header = window.packet_table.horizontalHeader()
     header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-    for column, width in enumerate((62, 112, 235, 235, 90, 90, 90, 70)):
+    for column, width in enumerate((62, 112, 235, 235, 90, 90, 90, 70, 190, 145)):
         window.packet_table.setColumnWidth(column, width)
     header.setStretchLastSection(True)
 

@@ -1,4 +1,4 @@
-"""实验 1A 第三阶段：有界缓存、过滤及异步 PCAP 导入窗口。"""
+"""实验 1A 第四阶段：抓包、过滤、PCAP 导入及域名证据分析窗口。"""
 from __future__ import annotations
 import sys
 import time
@@ -9,6 +9,8 @@ from scapy.all import conf
 from capture_engine import MAX_BYTES, CaptureWorker, PacketBuffer, SaveWorker
 from packet_filter import FilterSpec, parse_filter
 from packet_model import PacketTableModel
+from domain_analysis import DomainAnalysisWorker
+from domain_ui import DomainController
 from pcap_io import LoadWorker as _LoadWorker
 from sniffer_cli import get_interfaces
 from ui_layout import apply_style, build_layout
@@ -22,6 +24,10 @@ class SnifferWindow(QMainWindow):
         self.capture_thread = None
         self.save_thread = None
         self.load_thread = None
+        self.analysis_thread = None
+        self.domain_controller = DomainController()
+        self.analysis_result = None
+        self._dataset_generation = self.domain_controller.generation
         self._load_path = ""
         self._before_load = None
         self._load_cancel_requested = False
@@ -91,7 +97,7 @@ class SnifferWindow(QMainWindow):
         self.update_status()
     def is_busy(self) -> bool:
         return (self.capture_thread is not None or self.save_thread is not None
-                or self.load_thread is not None)
+                or self.load_thread is not None or self.analysis_thread is not None)
     def update_controls(self) -> None:
         stats = self.buffer.snapshot()
         idle = not self.is_busy() and not self._closing and stats.pending == 0
@@ -101,9 +107,10 @@ class SnifferWindow(QMainWindow):
             and not stats.limit_reached
         )
         loading = self.load_thread is not None
-        self.stop_button.setText("取消读取" if loading else "停止")
+        analysing = self.analysis_thread is not None
+        self.stop_button.setText("取消读取" if loading else ("取消分析" if analysing else "停止"))
         self.stop_button.setEnabled(
-            ((loading and not self._load_cancel_requested) or (self.capture_thread is not None
+            ((loading and not self._load_cancel_requested) or (analysing and not self.analysis_thread.cancel_event.is_set()) or (self.capture_thread is not None
                          and self.state in ("starting", "running")))
             and not self._closing
         )
@@ -113,8 +120,10 @@ class SnifferWindow(QMainWindow):
         self.interface_box.setEnabled(idle and empty and not self.source_file)
         self.limit_box.setEnabled(idle and empty and not self.source_file)
         for widget in (self.protocol_box, self.ip_edit, self.port_edit,
+                       self.domain_edit, self.candidate_box,
                        self.apply_filter_button, self.reset_filter_button):
             widget.setEnabled(idle)
+        self.analyze_button.setEnabled(idle and bool(self.packets))
     def update_status(self) -> None:
         """显示应用回调计数，不将应用丢弃解释为网卡总丢包。"""
         stats = self.buffer.snapshot()
@@ -123,6 +132,7 @@ class SnifferWindow(QMainWindow):
             "stopping": "正在停止抓包", "draining": "正在整理剩余数据",
             "stopped": "已停止", "saving": "正在保存", "error": "发生错误",
             "loading": "正在读取 PCAP", "loading_cancel": "正在取消读取",
+            "analysing": "正在分析域名", "analysis_cancel": "正在取消域名分析",
         }
         mode = f"文件模式：{Path(self.source_file).name}" if self.source_file else "实时模式"
         text = f"模式：{mode} · 状态：{labels.get(self.state, self.state)}"
@@ -183,6 +193,7 @@ class SnifferWindow(QMainWindow):
         self.state = "starting"
         self.notice = "正在建立后台捕获任务"
         self.capture_thread.start()
+        self._invalidate_analysis()
         self.update_controls()
         self.update_status()
     def _capture_ready(self) -> None:
@@ -199,6 +210,13 @@ class SnifferWindow(QMainWindow):
             self.load_thread.request_cancel()
             self.state = "loading_cancel"
             self.notice = "正在取消读取，当前数据保持不变"
+            self.update_controls()
+            self.update_status()
+            return
+        if self.analysis_thread is not None:
+            self.analysis_thread.request_cancel()
+            self.state = "analysis_cancel"
+            self.notice = "正在取消域名分析，当前原始数据保持不变"
             self.update_controls()
             self.update_status()
             return
@@ -240,6 +258,8 @@ class SnifferWindow(QMainWindow):
             self.finish_save()
         if self.load_thread is not None and self.load_thread.isFinished():
             self.finish_load()
+        if self.analysis_thread is not None and self.analysis_thread.isFinished():
+            self.finish_domain_analysis()
         self.update_controls()
         self.update_status()
         if self._closing and not self.is_busy() and not self.buffer.snapshot().pending:
@@ -258,9 +278,30 @@ class SnifferWindow(QMainWindow):
         try:
             original = getattr(packet, "original", None)
             raw = bytes(original) if original else bytes(packet)
-            self.detail_text.setPlainText(
+            text = (
                 f"{packet.show(dump=True)}\n\n十六进制原始数据：\n{raw.hex(' ')}"
             )
+            if self.analysis_result is not None:
+                detail = self.analysis_result.row_evidence(row)
+                if detail:
+                    source_labels = {
+                        "dns_query": "DNS 查询", "dns_response": "DNS 响应",
+                        "http_host": "HTTP Host", "tls_sni": "TLS SNI",
+                        "dns_candidate": "DNS/IP/TTL 候选",
+                    }
+                    text += "\n\n域名证据：\n" + "\n".join(
+                        f"{item.domain} | {source_labels.get(getattr(item.source, 'value', item.source), str(item.source))}"
+                        f" | 原始包 #{item.packet_index + 1}"
+                        f" | 关联包 {', '.join('#' + str(index + 1) for index in item.related_packet_indices) or '无'}\n"
+                        f"{item.detail}"
+                        f"；事务 ID={item.transaction_id if item.transaction_id is not None else '-'}"
+                        f"；QNAME={item.qname or '-'}；QTYPE={item.qtype if item.qtype is not None else '-'}"
+                        f"；答案={', '.join(item.answers) or '-'}；TTL={item.ttl if item.ttl is not None else '-'}"
+                        for item in detail
+                    )
+                else:
+                    text += "\n\n域名证据：未找到可用的包内直接证据。"
+            self.detail_text.setPlainText(text)
         except Exception as exc:
             self.detail_text.setPlainText(f"无法展示该数据包：{exc}")
     def apply_display_filter(self) -> bool:
@@ -269,18 +310,25 @@ class SnifferWindow(QMainWindow):
             return False
         try:
             spec = parse_filter(
-                self.protocol_box.currentText(), self.ip_edit.text(), self.port_edit.text()
+                self.protocol_box.currentText(), self.ip_edit.text(), self.port_edit.text(), self.domain_edit.text()
             )
         except ValueError as exc:
             self.filter_status.setText(f"未改变：{exc}（上一组有效条件）")
             return False
         self.filter_spec = spec
-        self.proxy_model.set_filter(spec)
+        domain_rows = None
+        if spec.domain and self.analysis_result is not None:
+            domain_rows = self.analysis_result.rows_for_domain(
+                spec.domain, include_candidates=self.candidate_box.isChecked()
+            )
+        self.proxy_model.set_filters(spec, domain_rows)
         details = [spec.protocol]
         if spec.network is not None:
             details.append(str(spec.network))
         if spec.port is not None:
             details.append(f"端口 {spec.port}")
+        if spec.domain:
+            details.append(f"域名 {spec.domain}")
         self.filter_status.setText(
             "筛选已应用：" + " / ".join(details)
             + f"（{'无匹配' if not self.displayed_packets and self.packets else '显示 ' + str(self.displayed_packets)} / 保留 {len(self.packets)}）"
@@ -294,8 +342,9 @@ class SnifferWindow(QMainWindow):
         self.protocol_box.setCurrentText("全部")
         self.ip_edit.clear()
         self.port_edit.clear()
+        self.domain_edit.clear()
         self.filter_spec = FilterSpec()
-        self.proxy_model.set_filter(self.filter_spec)
+        self.proxy_model.set_filters(self.filter_spec, None)
         self.filter_status.setText("未设置筛选条件")
         self.update_status()
     apply_filter = apply_display_filter
@@ -320,6 +369,66 @@ class SnifferWindow(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 return
         self.open_path(path)
+
+    def start_domain_analysis(self) -> None:
+        """对停止后的稳定快照或已导入文件执行后台域名分析。"""
+        if self.is_busy() or self._closing or self.buffer.snapshot().pending or not self.packets:
+            return
+        snapshot = self.domain_controller.snapshot(self.packets, self.source_file or "live")
+        self.analysis_thread = DomainAnalysisWorker(snapshot, parent=self)
+        self.state = "analysing"
+        self.notice = "正在后台分析 DNS、HTTP Host 和 TLS SNI"
+        self.analysis_thread.start()
+        self.update_controls()
+        self.update_status()
+
+    analyze_domains = start_domain_analysis
+
+    def _invalidate_analysis(self) -> None:
+        """使旧分析结果失效；正在运行的 Worker 只请求取消。"""
+        if self.analysis_thread is not None:
+            self.analysis_thread.request_cancel()
+        self._dataset_generation = self.domain_controller.invalidate()
+        self.analysis_result = None
+        if getattr(self.filter_spec, "domain", ""):
+            self.filter_spec = FilterSpec(
+                self.filter_spec.protocol, self.filter_spec.network, self.filter_spec.port
+            )
+            if hasattr(self, "domain_edit"):
+                self.domain_edit.clear()
+            if hasattr(self, "filter_status"):
+                self.filter_status.setText("未设置筛选条件")
+        if hasattr(self, "source_model"):
+            self.source_model.set_analysis(None)
+            self.proxy_model.set_filters(self.filter_spec, None)
+
+    def finish_domain_analysis(self) -> None:
+        worker = self.analysis_thread
+        if worker is None or not worker.isFinished():
+            return
+        self.analysis_thread = None
+        if worker.result is not None and not worker.cancelled and not worker.error:
+            snapshot = worker.snapshot
+            same_dataset = self.domain_controller.accepts(snapshot, worker.result, self.packets)
+            if same_dataset:
+                self.analysis_result = worker.result
+                self.domain_controller.commit(snapshot, worker.result, self.packets)
+                self.source_model.set_analysis(worker.result)
+                self.proxy_model.set_filters(self.filter_spec, None)
+                self.state = "stopped"
+                self.notice = "域名分析完成；候选 DNS/IP/TTL 默认不参与确定筛选"
+            else:
+                self.state = "stopped"
+                self.notice = "域名分析结果已过期，未提交到当前数据集"
+        elif worker.cancelled:
+            self.state = "stopped"
+            self.notice = "域名分析已取消，原始数据保持不变"
+        else:
+            self.state = "error"
+            self.notice = worker.error or "域名分析失败，原始数据保持不变"
+        worker.deleteLater()
+        self.update_controls()
+        self.update_status()
     def open_path(self, path: str) -> None:
         """后台读取文件，成功前保持当前模型、缓存和筛选不变。"""
         if self.is_busy() or self._closing or self.buffer.snapshot().pending or not str(path):
@@ -366,7 +475,7 @@ class SnifferWindow(QMainWindow):
             self.source_file = before.get("source_file", self.source_file)
             self.filter_spec = before.get("filter_spec", self.filter_spec)
             self.proxy_model.setSourceModel(self.source_model)
-            self.proxy_model.set_filter(self.filter_spec)
+            self.proxy_model.set_filters(self.filter_spec, None)
             self.detail_text.clear()
             if cancelled:
                 self.state = before.get("state", "stopped")
@@ -391,9 +500,10 @@ class SnifferWindow(QMainWindow):
         self.source_model = new_model
         self.buffer = new_buffer
         self.proxy_model.setSourceModel(new_model)
-        self.proxy_model.set_filter(self.filter_spec)
+        self.proxy_model.set_filters(self.filter_spec, None)
         self.detail_text.clear()
         self.source_file = self._load_path
+        self._invalidate_analysis()
         self._capture_interface = ""
         self.state = "stopped"
         warning = str(getattr(worker, "warning", "") or "")
@@ -412,13 +522,15 @@ class SnifferWindow(QMainWindow):
         if self.is_busy() or self._closing or self.buffer.snapshot().pending:
             return
         self.source_model.clear()
+        self._invalidate_analysis()
         self.buffer = PacketBuffer(max_packets=self.limit_box.value())
         self.source_file = ""
         self.filter_spec = FilterSpec()
-        self.proxy_model.set_filter(self.filter_spec)
+        self.proxy_model.set_filters(self.filter_spec, None)
         self.protocol_box.setCurrentText("全部")
         self.ip_edit.clear()
         self.port_edit.clear()
+        self.domain_edit.clear()
         self.filter_status.setText("未设置筛选条件")
         self.detail_text.clear()
         self._capture_interface = ""
@@ -480,6 +592,8 @@ class SnifferWindow(QMainWindow):
                 self.stop_capture()
             elif self.capture_thread is not None:
                 self.stop_capture()
+            elif self.analysis_thread is not None:
+                self.stop_capture()
             elif self.save_thread is None:
                 self.state = "draining"
                 self.notice = "正在整理待处理包"
@@ -489,7 +603,7 @@ class SnifferWindow(QMainWindow):
         self.packet_timer.stop()
         event.accept()
 def main() -> int:
-    """创建应用并启动第三阶段桌面界面。"""
+    """创建应用并启动阶段 4 桌面界面。"""
     app = QApplication(sys.argv)
     apply_style(app)
     window = SnifferWindow()

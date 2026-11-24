@@ -7,6 +7,11 @@ from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.inet6 import IPv6, IPv6ExtHdrFragment, _ICMPv6, _IPv6ExtHdr
 from scapy.layers.l2 import ARP, Ether
 
+try:
+    from domain_models import AnalysisResult
+except ImportError:  # pragma: no cover - 阶段4模块缺失时保持旧入口可导入
+    AnalysisResult = object
+
 
 def _outer_layers(packet):
     """返回最外层网络头和直属载荷，跳过 IPv6 扩展头。
@@ -96,13 +101,20 @@ def packet_time(packet) -> str:
 class PacketTableModel(QAbstractTableModel):
     """保存原始数据包顺序，批量插入并懒加载行显示文本。"""
 
-    HEADERS = ["编号", "时间", "源地址", "目的地址", "协议", "源端口", "目的端口", "长度"]
+    BASE_HEADERS = ["编号", "时间", "源地址", "目的地址", "协议", "源端口", "目的端口", "长度"]
+    ANALYSIS_HEADERS = ["域名", "依据"]
 
     def __init__(self, parent=None):
         """创建空模型及按行号索引的显示缓存。"""
         super().__init__(parent)
         self.packets = []
         self._rows = {}
+        self.analysis_result = None
+
+    @property
+    def HEADERS(self):
+        """默认保持阶段3八列；完成域名分析后追加两列。"""
+        return self.BASE_HEADERS + (self.ANALYSIS_HEADERS if self.analysis_result is not None else [])
 
     def rowCount(self, parent=QModelIndex()) -> int:
         """返回顶层行数；表格不提供子节点。"""
@@ -146,7 +158,19 @@ class PacketTableModel(QAbstractTableModel):
                 )
             except Exception:
                 self._rows[row] = (str(row + 1), "-", "-", "-", "other", "-", "-", "-")
-        return self._rows[row][index.column()]
+        values = self._rows[row]
+        if self.analysis_result is not None:
+            domain, source = self.analysis_result.row_text(row)
+            values = values + (domain or "-", source or "-")
+        return values[index.column()]
+
+    def set_analysis(self, result: AnalysisResult | None) -> None:
+        """原子替换分析结果并更新表头和所有可见行。"""
+        if result is self.analysis_result:
+            return
+        self.beginResetModel()
+        self.analysis_result = result
+        self.endResetModel()
 
     def append_batch(self, packets) -> None:
         """一次追加一批原始包，不在插入期间解析数据包。
@@ -167,4 +191,5 @@ class PacketTableModel(QAbstractTableModel):
         self.beginResetModel()
         self.packets.clear()
         self._rows.clear()
+        self.analysis_result = None
         self.endResetModel()

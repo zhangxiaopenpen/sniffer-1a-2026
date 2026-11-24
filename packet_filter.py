@@ -10,6 +10,7 @@ from PySide6.QtCore import QSortFilterProxyModel
 from scapy.layers.inet import ICMP, IP, TCP, UDP
 from scapy.layers.inet6 import IPv6, IPv6ExtHdrFragment, _ICMPv6, _IPv6ExtHdr
 from scapy.layers.l2 import ARP
+from domain_parsers import normalize_domain
 
 
 PROTOCOLS = ("全部", "HTTP", "TCP", "UDP", "IPv4", "IPv6", "ICMP", "ICMPv6")
@@ -48,9 +49,10 @@ class FilterSpec:
     protocol: str = "全部"
     network: IPv4Network | IPv6Network | None = None
     port: int | None = None
+    domain: str = ""
 
 
-def parse_filter(protocol="全部", address="", port="") -> FilterSpec:
+def parse_filter(protocol="全部", address="", port="", domain="") -> FilterSpec:
     """校验界面输入并规范化协议、IP 地址和端口。
 
     Args:
@@ -99,7 +101,13 @@ def parse_filter(protocol="全部", address="", port="") -> FilterSpec:
         parsed_port = int(port_text, 10)
         if parsed_port > 65535:
             raise ValueError("端口必须在 0～65535 之间")
-    return FilterSpec(normalized_protocol, network, parsed_port)
+    domain_text = str(domain or "").strip()
+    if domain_text:
+        try:
+            domain_text = normalize_domain(domain_text)
+        except ValueError as exc:
+            raise ValueError("域名筛选必须是合法纯域名") from exc
+    return FilterSpec(normalized_protocol, network, parsed_port, domain_text)
 
 
 def _payload_bytes(transport) -> bytes:
@@ -305,6 +313,10 @@ class PacketFilterModel(QSortFilterProxyModel):
                 return False
             if self.domain_rows is not None and source_row not in self.domain_rows:
                 return False
+            if self.spec.domain and self.domain_rows is None:
+                result = getattr(source, "analysis_result", None)
+                if result is None or source_row not in result.rows_for_domain(self.spec.domain):
+                    return False
             return matches_packet(packets[int(source_row)], self.spec)
         except Exception:
             return False
