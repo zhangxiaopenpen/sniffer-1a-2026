@@ -1,4 +1,4 @@
-"""第三阶段嗅探器布局和莫兰迪浅色样式。"""
+"""第五阶段嗅探器布局和莫兰迪浅色样式。"""
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont
@@ -12,7 +12,7 @@ from packet_model import PacketTableModel
 
 
 def build_layout(window) -> None:
-    """构建控制区、八列表格和下方详情，并连接生命周期方法。
+    """构建控制区、动态列表格和下方详情，并连接生命周期方法。
 
     Args:
         window: 提供抓包、停止、清空、保存和状态方法的主窗口。
@@ -24,7 +24,7 @@ def build_layout(window) -> None:
     layout.setSpacing(10)
     title = QLabel("网络嗅探器")
     title.setObjectName("title")
-    subtitle = QLabel("实验 1A · 第四阶段 · 域名证据与 DNS 关联")
+    subtitle = QLabel("实验 1A · 第五阶段 · 域名证据与 TCP 流重组")
     subtitle.setObjectName("subtitle")
     layout.addWidget(title)
     layout.addWidget(subtitle)
@@ -62,6 +62,11 @@ def build_layout(window) -> None:
     limits.addWidget(window.limit_box)
     limits.addWidget(QLabel("或 32 MiB 原始数据，达到任一上限自动停止"))
     limits.addStretch()
+    window.stream_button = QPushButton("追踪 TCP 流")
+    window.stream_button.setObjectName("stream_button")
+    window.stream_button.setToolTip("停止抓包或导入 PCAP 后，重组 TCP 分段并分析 HTTP Host / TLS SNI")
+    window.stream_button.clicked.connect(window.start_stream_analysis)
+    limits.addWidget(window.stream_button)
     layout.addLayout(limits)
 
     filters = QHBoxLayout()
@@ -126,6 +131,11 @@ def build_layout(window) -> None:
     window.analysis_stats_label.setWordWrap(True)
     window.analysis_stats_label.setToolTip("完整 DNS 分析结果统计，不随显示筛选改变")
     layout.addWidget(window.analysis_stats_label)
+    window.stream_status_label = QLabel("TCP流：尚未分析")
+    window.stream_status_label.setObjectName("stream_status")
+    window.stream_status_label.setWordWrap(True)
+    window.stream_status_label.setToolTip("TCP 流分析覆盖完整保留数据集；选中数据包可查看流方向、状态和跨包证据")
+    layout.addWidget(window.stream_status_label)
 
     window.source_model = PacketTableModel(window)
     window.proxy_model = PacketFilterModel(window)
@@ -158,7 +168,7 @@ def build_layout(window) -> None:
     window.detail_text = QTextEdit()
     window.detail_text.setReadOnly(True)
     window.detail_text.setFont(QFont("Consolas", 10))
-    window.detail_text.setPlaceholderText("选择表格中的一行，查看协议字段与十六进制原始数据")
+    window.detail_text.setPlaceholderText("选择表格中的一行，查看 TCP 流详情、协议字段与十六进制原始数据")
     detail_layout.addWidget(window.detail_text)
     splitter = QSplitter(Qt.Orientation.Vertical)
     splitter.setChildrenCollapsible(False)
@@ -183,7 +193,7 @@ def apply_style(app) -> None:
         QLabel#status { background: #E4E9E4; color: #3D594F;
             border-radius: 7px; padding: 9px; }
         QLabel#counters { color: #5A625E; padding: 3px; }
-        QLabel#analysis_stats { background: #E9E5E0; color: #5A625E;
+        QLabel#analysis_stats, QLabel#stream_status { background: #E9E5E0; color: #5A625E;
             border-radius: 6px; padding: 7px 9px; }
         QLabel#filter_status { color: #5A625E; padding: 1px 3px; }
         QComboBox, QSpinBox, QLineEdit, QTextEdit, QTableView {

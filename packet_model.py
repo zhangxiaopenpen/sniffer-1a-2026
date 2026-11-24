@@ -1,4 +1,4 @@
-"""按需解析可见行的八列数据包表格模型。"""
+"""按需解析数据包基础列，并独立追加域名与 TCP 流分析列。"""
 
 from datetime import datetime
 
@@ -103,6 +103,7 @@ class PacketTableModel(QAbstractTableModel):
 
     BASE_HEADERS = ["编号", "时间", "源地址", "目的地址", "协议", "源端口", "目的端口", "长度"]
     ANALYSIS_HEADERS = ["域名", "依据"]
+    STREAM_HEADERS = ["TCP流", "流方向", "流状态"]
 
     def __init__(self, parent=None):
         """创建空模型及按行号索引的显示缓存。"""
@@ -110,18 +111,23 @@ class PacketTableModel(QAbstractTableModel):
         self.packets = []
         self._rows = {}
         self.analysis_result = None
+        self.stream_result = None
 
     @property
     def HEADERS(self):
-        """默认保持阶段3八列；完成域名分析后追加两列。"""
-        return self.BASE_HEADERS + (self.ANALYSIS_HEADERS if self.analysis_result is not None else [])
+        """返回八个基础列及当前有效的域名、TCP 流结果列。"""
+        return (
+            self.BASE_HEADERS
+            + (self.ANALYSIS_HEADERS if self.analysis_result is not None else [])
+            + (self.STREAM_HEADERS if self.stream_result is not None else [])
+        )
 
     def rowCount(self, parent=QModelIndex()) -> int:
         """返回顶层行数；表格不提供子节点。"""
         return 0 if parent.isValid() else len(self.packets)
 
     def columnCount(self, parent=QModelIndex()) -> int:
-        """返回固定的八列；子节点列数为零。"""
+        """返回当前动态列数；子节点列数为零。"""
         return 0 if parent.isValid() else len(self.HEADERS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
@@ -135,7 +141,7 @@ class PacketTableModel(QAbstractTableModel):
         return None
 
     def data(self, index, role=Qt.ItemDataRole.DisplayRole):
-        """仅在视图请求时解析一行，并缓存该行的八个显示值。"""
+        """缓存八个基础显示值，再按源行号读取独立分析结果。"""
         if (
             not index.isValid()
             or index.model() is not self
@@ -162,6 +168,8 @@ class PacketTableModel(QAbstractTableModel):
         if self.analysis_result is not None:
             domain, source = self.analysis_result.row_text(row)
             values = values + (domain or "-", source or "-")
+        if self.stream_result is not None:
+            values = values + tuple(self.stream_result.row_text(row))
         return values[index.column()]
 
     def set_analysis(self, result: AnalysisResult | None) -> None:
@@ -170,6 +178,19 @@ class PacketTableModel(QAbstractTableModel):
             return
         self.beginResetModel()
         self.analysis_result = result
+        self.endResetModel()
+
+    def set_stream_analysis(self, result) -> None:
+        """原子替换 TCP 流结果，保留域名分析和基础行缓存。
+
+        Args:
+            result: 提供 ``row_text(source_row)`` 三字符串接口的结果，
+                或用于移除 TCP 流列的 ``None``。
+        """
+        if result is self.stream_result:
+            return
+        self.beginResetModel()
+        self.stream_result = result
         self.endResetModel()
 
     def append_batch(self, packets) -> None:
@@ -181,6 +202,8 @@ class PacketTableModel(QAbstractTableModel):
         batch = list(packets)
         if not batch:
             return
+        # 新数据使流快照失效；列重置必须先于行插入，避免嵌套模型通知。
+        self.set_stream_analysis(None)
         start = len(self.packets)
         self.beginInsertRows(QModelIndex(), start, start + len(batch) - 1)
         self.packets.extend(batch)
@@ -192,4 +215,5 @@ class PacketTableModel(QAbstractTableModel):
         self.packets.clear()
         self._rows.clear()
         self.analysis_result = None
+        self.stream_result = None
         self.endResetModel()

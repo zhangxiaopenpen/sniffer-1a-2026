@@ -247,7 +247,7 @@ class Stage3GuiTests(unittest.TestCase):
         self.assertTrue(self.window.source_file)
         self.window.clear_packets()
         self.assertEqual(self.window.source_file, "")
-        self.assertEqual(self.window.windowTitle(), "实验 1A · 网络嗅探器 · 第三阶段")
+        self.assertEqual(self.window.windowTitle(), "实验 1A · 网络嗅探器 · 第五阶段")
         self.assertEqual(self.window.packet_model.rowCount(), 0)
         self.assertEqual(self.window.buffer.snapshot().received, 0)
         self.assertTrue(self.window.start_button.isEnabled())
